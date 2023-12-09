@@ -1,0 +1,74 @@
+from AlgorithmImports import *
+
+class ImprovedStrategy(QCAlgorithm):
+
+    def Initialize(self):
+        self.SetStartDate(2019, 1, 1)
+        self.SetEndDate(2021, 1, 1)
+        self.SetCash(100000)
+
+        self.symbols = ["AAPL", "GOOGL", "AMZN", "MSFT"]
+        self.lookback_momentum = 20
+        self.lookback_volatility = 30
+        self.stopLossPercent = 0.02
+        self.takeProfitPercent = 0.05
+        self.momentum = {}
+        self.volatility = {}
+        self.invested = {}
+
+        for symbol in self.symbols:
+            self.AddEquity(symbol, Resolution.Daily)
+            self.momentum[symbol] = self.EMA(symbol, self.lookback_momentum, Resolution.Daily)
+            self.volatility[symbol] = self.STD(symbol, self.lookback_volatility, Resolution.Daily)
+            self.invested[symbol] = False
+
+        self.SetWarmUp(max(self.lookback_momentum, self.lookback_volatility))
+
+    def OnData(self, data):
+        if self.IsWarmingUp:
+            return
+
+        for symbol in self.symbols:
+            if symbol in data and data[symbol] is not None and hasattr(data[symbol], 'Price'):
+                momentum_value = self.momentum[symbol].Current.Value
+                volatility_value = self.volatility[symbol].Current.Value
+                price = data[symbol].Price
+                invested = self.Portfolio[symbol].Invested
+
+                # Calculate order size based on volatility
+                quantity = self.CalculateOrderQuantity(symbol, 0.1)  # Adjusted to a fixed fraction for demonstration
+
+                # Buy conditions
+                if momentum_value > 0 and not invested:
+                    limit_price = price * (1 - self.stopLossPercent)
+                    self.LimitOrder(symbol, quantity, limit_price)
+                    self.invested[symbol] = True
+                    self.Debug(f"Buy Signal (Momentum & Volatility strategy) for {symbol}")
+
+                # Sell conditions
+                elif invested:
+                    cost_basis = self.Portfolio[symbol].AveragePrice
+                    take_profit_price = cost_basis * (1 + self.takeProfitPercent)
+                    stop_loss_price = cost_basis * (1 - self.stopLossPercent)
+
+                    if price >= take_profit_price:
+                        self.LimitOrder(symbol, -self.Portfolio[symbol].Quantity, price)
+                        self.invested[symbol] = False
+                        self.Debug(f"Take Profit Signal for {symbol}")
+                    elif price <= stop_loss_price:
+                        self.LimitOrder(symbol, -self.Portfolio[symbol].Quantity, price)
+                        self.invested[symbol] = False
+                        self.Debug(f"Stop Loss Signal for {symbol}")
+
+                # Sell conditions (negative momentum or volatility)
+                elif (momentum_value <= 0 or volatility_value <= 0) and invested:
+                    self.LimitOrder(symbol, -quantity, price * (1 + self.stopLossPercent))
+                    self.invested[symbol] = False
+                    self.Debug(f"Sell Signal (Momentum & Volatility strategy) for {symbol}")
+
+                self.Debug(f"{symbol} - Price: {price}, Momentum: {momentum_value}, Volatility: {volatility_value}, Invested: {invested}")
+
+    def OnEndOfDay(self, symbol):
+        if symbol in self.momentum and symbol in self.volatility:
+            if self.momentum[symbol].IsReady and self.volatility[symbol].IsReady:
+                self.Debug(f"{symbol} - Momentum: {self.momentum[symbol].Current.Value}, Volatility: {self.volatility[symbol].Current.Value}")
